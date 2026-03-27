@@ -1,0 +1,107 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL (transactional state) ──────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: threadmap
+      POSTGRES_PASSWORD: threadmap
+      POSTGRES_DB: threadmap
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threadmap"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (caching, session, pub/sub) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redpanda (Kafka-compatible event backbone) ────────────────
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+    ports:
+      - "18082:18082"
+      - "19092:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+
+  # ── Redpanda Console ──────────────────────────────────────────
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.5
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redpanda
+
+  # ── MinIO (S3-compatible object storage for evidence) ─────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: threadmap
+      MINIO_ROOT_PASSWORD: threadmap-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  # ── OpenSearch (full-text search) ─────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+  # ── ClickHouse (time-series analytics) ────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1
+    environment:
+      CLICKHOUSE_DB: threadmap
+      CLICKHOUSE_USER: threadmap
+      CLICKHOUSE_PASSWORD: threadmap
+    ports:
+      - "8123:8123"
+      - "9009:9009"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+volumes:
+  pgdata:
+  redpanda-data:
+  minio-data:
+  opensearch-data:
+  clickhouse-data:
